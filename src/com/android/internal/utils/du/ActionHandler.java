@@ -27,6 +27,8 @@ import android.app.ActivityOptions;
 import android.app.IActivityManager;
 import android.app.SearchManager;
 import android.app.ActivityManager.RunningAppProcessInfo;
+import android.app.usage.UsageStats;
+import android.app.usage.UsageStatsManager;
 import android.bluetooth.BluetoothAdapter;
 import android.content.ActivityNotFoundException;
 import android.content.ContentResolver;
@@ -42,6 +44,7 @@ import android.hardware.input.InputManager;
 import android.media.AudioManager;
 import android.media.ToneGenerator;
 import android.media.session.MediaSessionLegacyHelper;
+import android.net.ConnectivityManager;
 import android.net.wifi.WifiManager;
 import android.os.Bundle;
 import android.os.Handler;
@@ -67,6 +70,7 @@ import android.widget.Toast;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -89,7 +93,7 @@ public class ActionHandler {
     public static final String SYSTEMUI_TASK_SETTINGS_PANEL = "task_settings_panel";
     public static final String SYSTEMUI_TASK_NOTIFICATION_PANEL = "task_notification_panel";
     public static final String SYSTEMUI_TASK_SCREENSHOT = "task_screenshot";
-   // public static final String SYSTEMUI_TASK_SCREENRECORD = "task_screenrecord";
+    public static final String SYSTEMUI_TASK_REGION_SCREENSHOT = "task_region_screenshot";
     // public static final String SYSTEMUI_TASK_AUDIORECORD =
     // "task_audiorecord";
     public static final String SYSTEMUI_TASK_EXPANDED_DESKTOP = "task_expanded_desktop";
@@ -131,6 +135,7 @@ public class ActionHandler {
     public static final String INTENT_SHOW_POWER_MENU = "action_handler_show_power_menu";
    // public static final String INTENT_TOGGLE_SCREENRECORD = "action_handler_toggle_screenrecord";
     public static final String INTENT_SCREENSHOT = "action_handler_screenshot";
+    public static final String INTENT_REGION_SCREENSHOT = "action_handler_region_screenshot";
     public static final String INTENT_TOGGLE_FLASHLIGHT = "action_handler_toggle_flashlight";
 
     static enum SystemAction {
@@ -138,7 +143,7 @@ public class ActionHandler {
         SettingsPanel(SYSTEMUI_TASK_SETTINGS_PANEL, SYSTEMUI, "label_action_settings_panel", "ic_sysbar_settings_panel"),
         NotificationPanel(SYSTEMUI_TASK_NOTIFICATION_PANEL, SYSTEMUI, "label_action_notification_panel", "ic_sysbar_notification_panel"),
         Screenshot(SYSTEMUI_TASK_SCREENSHOT, SYSTEMUI, "label_action_screenshot", "ic_sysbar_screenshot"),
-       // Screenrecord(SYSTEMUI_TASK_SCREENRECORD, SYSTEMUI, "label_action_screenrecord", "ic_sysbar_record_screen"),
+        RegionScreenshot(SYSTEMUI_TASK_REGION_SCREENSHOT, SYSTEMUI, "label_action_region_screenshot", "ic_sysbar_region_screenshot"),
         ExpandedDesktop(SYSTEMUI_TASK_EXPANDED_DESKTOP, SYSTEMUI, "label_action_expanded_desktop", "ic_sysbar_expanded_desktop"),
         ScreenOff(SYSTEMUI_TASK_SCREENOFF, SYSTEMUI, "label_action_screen_off", "ic_sysbar_screen_off"),
         KillApp(SYSTEMUI_TASK_KILL_PROCESS, SYSTEMUI, "label_action_force_close_app", "ic_sysbar_killtask"),
@@ -202,7 +207,8 @@ public class ActionHandler {
             SystemAction.ImeArrowLeft, SystemAction.ImeArrowRight,
             SystemAction.ImeArrowUp, SystemAction.InAppSearch,
             SystemAction.VolumePanel, SystemAction.ClearNotifications,
-            SystemAction.EditingSmartbar, SystemAction.SplitScreen
+            SystemAction.EditingSmartbar, SystemAction.SplitScreen,
+            SystemAction.RegionScreenshot
     };
 
     public static class ActionIconResources {
@@ -447,11 +453,9 @@ public class ActionHandler {
         } else if (action.equals(SYSTEMUI_TASK_SCREENSHOT)) {
             takeScreenshot(context);
             return;
-       /* } else if (action.equals(SYSTEMUI_TASK_SCREENRECORD)) {
-            takeScreenrecord(context);
-            return;*/
-            // } else if (action.equals(SYSTEMUI_TASK_AUDIORECORD)) {
-            // takeAudiorecord();
+        } else if (action.equals(SYSTEMUI_TASK_REGION_SCREENSHOT)) {
+            takeRegionScreenshot(context);
+            return;
         } else if (action.equals(SYSTEMUI_TASK_EXPANDED_DESKTOP)) {
             toggleExpandedDesktop(context);
             return;
@@ -791,6 +795,9 @@ public class ActionHandler {
     private static void toggleWifiAP(Context context) {
         final ContentResolver cr = context.getContentResolver();
         WifiManager wm = (WifiManager) context.getSystemService(Context.WIFI_SERVICE);
+        final ConnectivityManager mConnectivityManager;
+        mConnectivityManager = (ConnectivityManager) context.getSystemService(
+                Context.CONNECTIVITY_SERVICE);
         int state = wm.getWifiApState();
         boolean enabled = false;
         switch (state) {
@@ -803,33 +810,24 @@ public class ActionHandler {
                 enabled = true;
                 break;
         }
-        /**
-         * Disable Wifi if enabling tethering
-         */
-        int wifiState = wm.getWifiState();
-        if (enabled && ((wifiState == WifiManager.WIFI_STATE_ENABLING) ||
-                (wifiState == WifiManager.WIFI_STATE_ENABLED))) {
-            wm.setWifiEnabled(false);
-            Settings.Global.putInt(cr, Settings.Global.WIFI_SAVED_STATE, 1);
-        }
 
         // Turn on the Wifi AP
-        wm.setWifiApEnabled(null, enabled);
+        if (enabled) {
+            OnStartTetheringCallback callback = new OnStartTetheringCallback();
+            mConnectivityManager.startTethering(
+                    ConnectivityManager.TETHERING_WIFI, false, callback);
+        } else {
+            mConnectivityManager.stopTethering(ConnectivityManager.TETHERING_WIFI);
+        }
+    }
 
-        /**
-         * If needed, restore Wifi on tether disable
-         */
-        if (!enabled) {
-            int wifiSavedState = 0;
-            try {
-                wifiSavedState = Settings.Global.getInt(cr, Settings.Global.WIFI_SAVED_STATE);
-            } catch (Settings.SettingNotFoundException e) {
-                // Do nothing here
-            }
-            if (wifiSavedState == 1) {
-                wm.setWifiEnabled(true);
-                Settings.Global.putInt(cr, Settings.Global.WIFI_SAVED_STATE, 0);
-            }
+    static final class OnStartTetheringCallback extends
+            ConnectivityManager.OnStartTetheringCallback {
+        @Override
+        public void onTetheringStarted() {}
+        @Override
+        public void onTetheringFailed() {
+          // TODO: Show error.
         }
     }
 
@@ -843,75 +841,85 @@ public class ActionHandler {
                 UserHandle.USER_ALL));
     }
 
-   /* private static void takeScreenrecord(Context context) {
-        context.sendBroadcastAsUser(new Intent(INTENT_TOGGLE_SCREENRECORD), new UserHandle(
+    private static void takeRegionScreenshot(Context context) {
+        context.sendBroadcastAsUser(new Intent(INTENT_REGION_SCREENSHOT), new UserHandle(
                 UserHandle.USER_ALL));
-    }*/
+    }
+
 
     private static void killProcess(Context context) {
         if (context.checkCallingOrSelfPermission(android.Manifest.permission.FORCE_STOP_PACKAGES) == PackageManager.PERMISSION_GRANTED
-                && !isLockTaskOn()) {
+            && context.checkCallingOrSelfPermission(android.Manifest.permission.FORCE_STOP_PACKAGES) == PackageManager.PERMISSION_GRANTED
+            && !isLockTaskOn()) {
             try {
+                PackageManager packageManager = context.getPackageManager();
                 final Intent intent = new Intent(Intent.ACTION_MAIN);
                 String defaultHomePackage = "com.android.launcher";
                 intent.addCategory(Intent.CATEGORY_HOME);
-                final ResolveInfo res = context.getPackageManager()
-                        .resolveActivity(intent, 0);
+                final ResolveInfo res = packageManager.resolveActivity(intent, 0);
                 if (res.activityInfo != null
                         && !res.activityInfo.packageName.equals("android")) {
                     defaultHomePackage = res.activityInfo.packageName;
                 }
-                IActivityManager am = ActivityManagerNative.getDefault();
-                String pkgName;
-                List<RunningAppProcessInfo> apps = am.getRunningAppProcesses();
-                for (RunningAppProcessInfo appInfo : apps) {
-                    int uid = appInfo.uid;
-                    // Make sure it's a foreground user application (not system,
-                    // root, phone, etc.)
-                    if (uid >= Process.FIRST_APPLICATION_UID
-                            && uid <= Process.LAST_APPLICATION_UID
-                            && appInfo.importance == RunningAppProcessInfo.IMPORTANCE_FOREGROUND) {
-                        if (appInfo.pkgList != null
-                                && (appInfo.pkgList.length > 0)) {
-                            for (String pkg : appInfo.pkgList) {
-                                if (!pkg.equals("com.android.systemui")
-                                        && !pkg.equals(defaultHomePackage)
-                                        && !pkg.equals("com.google.android.googlequicksearchbox")
-                                        && !pkg.equals("com.google.android.gms")
-                                        && !pkg.equals("com.google.android.ext.services")
-                                        && !pkg.equals("android.ext.services")
-                                        && !pkg.equals("net.nurik.roman.muzei")
-                                        && !pkg.equals("com.touchtype.swiftkey")
-                                    	&& !pkg.equals("net.dinglisch.android.taskerm")
-                                        && !isPackageLiveWalls(context, pkg)) {
-                                    try {
-                                        ApplicationInfo applicationInfo = context
-                                                .getPackageManager().getPackageInfo(pkg, 0).applicationInfo;
-                                        pkgName = applicationInfo.loadLabel(
-                                                context.getPackageManager()).toString();
-                                    } catch (Exception e) {
-                                        // cheat just a little, highly unlikely event
-                                        pkgName = "App";
-                                    }
-                                    am.forceStopPackage(pkg,
-                                            UserHandle.USER_CURRENT);
-                                    Resources systemUIRes = DUActionUtils.getResourcesForPackage(context, DUActionUtils.PACKAGE_SYSTEMUI);
-                                    int ident = systemUIRes.getIdentifier("app_killed_message", DUActionUtils.STRING, DUActionUtils.PACKAGE_SYSTEMUI);
-                                    String toastMsg = systemUIRes.getString(ident, pkgName);
-                                    Toast.makeText(context, toastMsg, Toast.LENGTH_SHORT).show();
-                                    return;
-                                }
-                            }
-                        } else {
-                            pkgName = appInfo.processName;
-                            Process.killProcess(appInfo.pid);
-                            Resources systemUIRes = DUActionUtils.getResourcesForPackage(context, DUActionUtils.PACKAGE_SYSTEMUI);
-                            int ident = systemUIRes.getIdentifier("app_killed_message", DUActionUtils.STRING, DUActionUtils.PACKAGE_SYSTEMUI);
-                            String toastMsg = systemUIRes.getString(ident, pkgName);
-                            Toast.makeText(context, toastMsg, Toast.LENGTH_SHORT).show();
-                            return;
+
+                // Use UsageStats to determine foreground app
+                UsageStatsManager usageStatsManager = (UsageStatsManager)
+                    context.getSystemService(Context.USAGE_STATS_SERVICE);
+                long current = System.currentTimeMillis();
+                long past = current - (1000 * 60 * 60); // uses snapshot of usage over past 60 minutes
+
+                // Get the list, then sort it chronilogically so most recent usage is at start of list
+                List<UsageStats> recentApps = usageStatsManager.queryUsageStats(
+                    UsageStatsManager.INTERVAL_DAILY, past, current);
+                Collections.sort(recentApps, new Comparator<UsageStats>() {
+                    @Override
+                    public int compare(UsageStats lhs, UsageStats rhs) {
+                        long timeLHS = lhs.getLastTimeUsed();
+                        long timeRHS = rhs.getLastTimeUsed();
+                        if (timeLHS > timeRHS) {
+                            return -1;
+                        } else if (timeLHS < timeRHS) {
+                            return 1;
                         }
+                        return 0;
                     }
+                });
+
+                IActivityManager am = ActivityManagerNative.getDefault();
+                // this may not be needed due to !isLockTaskOn() in entry if
+                //if (am.getLockTaskModeState() != ActivityManager.LOCK_TASK_MODE_NONE) return;
+
+                // Look for most recent usagestat with lastevent == 1 and grab package name
+                // ...this seems to map to the UsageEvents.Event.MOVE_TO_FOREGROUND
+                String pkg = null;
+                for (int i = 0; i < recentApps.size(); i++) {
+                    UsageStats mostRecent = recentApps.get(i);
+                    if (mostRecent.mLastEvent == 1) {
+                        pkg = mostRecent.mPackageName;
+                        break;
+                    }
+                }
+
+                if (pkg != null && !pkg.equals("com.android.systemui")
+                        && !pkg.equals(defaultHomePackage)) {
+                    am.forceStopPackage(pkg, UserHandle.USER_CURRENT);
+                    String pkgName;
+                    try {
+                        pkgName = (String) packageManager.getApplicationLabel(
+                            packageManager.getApplicationInfo(pkg, PackageManager.GET_META_DATA));
+                    } catch (PackageManager.NameNotFoundException e) {
+                        // Just use pkg if issues getting appName
+                        pkgName = pkg;
+                    }
+
+                    Resources systemUIRes = DUActionUtils.getResourcesForPackage(context, DUActionUtils.PACKAGE_SYSTEMUI);
+                    int ident = systemUIRes.getIdentifier("app_killed_message", DUActionUtils.STRING, DUActionUtils.PACKAGE_SYSTEMUI);
+                    String toastMsg = systemUIRes.getString(ident, pkgName);
+                    Toast.makeText(context, toastMsg, Toast.LENGTH_SHORT).show();
+                    return;
+                } else {
+                    // make a "didnt kill anything" toast?
+                    return;
                 }
             } catch (RemoteException remoteException) {
                 Log.d("ActionHandler", "Caller cannot kill processes, aborting");
